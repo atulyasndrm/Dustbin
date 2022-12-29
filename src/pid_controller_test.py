@@ -10,13 +10,14 @@ rospy.init_node('pid_try', anonymous=True)
 
 class pidcontroller:
     # Defining the P,I,D control parameters
-    def __init__(self, kp=[0.05,0.05,3], kd=[0.2,0.2,0.0],ki=[0.000,0.000,0.0]):
+    def __init__(self, kp=[0.05,0.05,0.01], kd=[0,0,0],ki=[0.0,0.000,0.01]):
         # self.talker =  Protocol(IP, PORT)
         self.kp = kp
         self.kd = kd
         self.ki = ki
         # self.breaker = True 
         self.prev_time = [0.0,0.0,0.0]
+        self.error_tol=0.01
         self.prev_error = [0.0,0.0,0.0]
         self.e_i = [0.0,0.0,0.0]
         self.vel = [0.0,0.0,0.0]
@@ -31,15 +32,15 @@ class pidcontroller:
         self.equilibrium_pose = [0,0,0,15]#need to do something about thrust
 
     def callback(self,msg):
-        self.curr_pos[0]=msg.pose.pose.x
-        self.curr_pos[1]=msg.pose.pose.y
-        self.curr_pos[2]=msg.pose.pose.z
+        self.curr_pos[0]=msg.pose.pose.position.x
+        self.curr_pos[1]=msg.pose.pose.position.y
+        self.curr_pos[2]=msg.pose.pose.position.z
 
     def talker(self ,roll, pitch, yaw, thrust):
         p=RollPitchYawrateThrust()
         p.pitch=pitch
         p.roll=roll
-        p.thrust=thrust
+        p.thrust.z=thrust
         p.yaw_rate=yaw
         pub = rospy.Publisher('/firefly/command/roll_pitch_yawrate_thrust', RollPitchYawrateThrust, queue_size=10)
         # while not rospy.is_shutdown():  
@@ -49,19 +50,20 @@ class pidcontroller:
         rospy.Subscriber("/firefly/ground_truth/odometry",Odometry,self.callback)
         
             
-    def calc_error(self,error,i): # Calculates the error, its `derivative' and `integral'
+    def calc_error(self,i,error):
+        print(i) # Calculates the error, its `derivative' and `integral'
         curr_time = time.time() 
         dt = 0.0
-        if self.curr_time != 0.0:
-            dt = curr_time - self.prev_time
-        de = error[i] - self.prev_error[i]
-        e_p = error[i]
-        self.e_i[i] += error[i] * dt
+        if curr_time != 0.0:
+            dt = curr_time - self.prev_time[i]
+        de = error - self.prev_error[i]
+        e_p = error
+        self.e_i[i] += error * dt
         e_d = 0
         if dt > 0:
             e_d = de/dt
         self.prev_time[i] = curr_time
-        self.prev_error[i] = error[i]
+        self.prev_error[i] = error
         return (self.kp[i] * e_p) + (self.ki[i]*self.e_i[i]) + (self.kd[i]*e_d)
 
 
@@ -69,17 +71,17 @@ class pidcontroller:
         # if not self.breaker:
         errors = (targ_pos[0]-curr_pos[0], targ_pos[1]-curr_pos[1], targ_pos[2]-curr_pos[2])
         for i in range(len(errors)):
-            self.vel[i] = self.calc_error(errors[i],i)
+            self.vel[i] = self.calc_error(i,errors[i])
         if max(errors) > self.error_tol or min(errors) < -self.error_tol:
             for(i) in range(2): 
                 curr_temp=self.equilibrium_pose[i]+self.speed*self.vel[i]
-                if((curr_temp<self.talker.MAX_THRUST) and (curr_temp>self.talker.MIN_THRUST)):
+                if((curr_temp<40) and (curr_temp>0)):
                     curr_ori[i]=curr_temp
                 else:
-                    if(curr_temp>self.talker.MAX_THRUST):
-                        curr_ori[i]=self.talker.MAX_THRUST
+                    if(curr_temp>40):
+                        curr_ori[i]=40
                     else:
-                        curr_ori[i]=self.talker.MIN_THRUST
+                        curr_ori[i]=0
             
             curr_ori[3] = curr_ori[3]+self.speed*self.vel[2]
             if(curr_ori[3]+self.speed*self.vel[2]<0):
